@@ -16,10 +16,12 @@
  */
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Net.Http;
-using System.Text;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
 using System.Threading.Tasks;
+using BinaryKits.Zpl.Viewer;
+using BinaryKits.Zpl.Viewer.ElementDrawers;
 using Labelary.Abstractions;
 using UnitsNet;
 
@@ -27,9 +29,7 @@ namespace Labelary.Service
 {
 	public class LabelService : ILabelService
 	{
-		private static readonly string BaseUrl = "http://api.labelary.com/v1/printers";
-
-		public async Task<IGetLabelResponse> GetLabelAsync(ILabelConfiguration labelConfiguration, string zpl, int labelIndex = 0)
+		public Task<IGetLabelResponse> GetLabelAsync(ILabelConfiguration labelConfiguration, string zpl, int labelIndex = 0)
 		{
 			GetLabelResponse returnValue = new()
 			{
@@ -38,71 +38,50 @@ namespace Labelary.Service
 
 			try
 			{
-				using (HttpClient client = new())
+				string filteredZpl = zpl.Filter(labelConfiguration.LabelFilters);
+
+				double widthMm = (new Length(labelConfiguration.LabelWidth, labelConfiguration.Unit)).ToUnit(UnitsNet.Units.LengthUnit.Millimeter).Value;
+				double heightMm = (new Length(labelConfiguration.LabelHeight, labelConfiguration.Unit)).ToUnit(UnitsNet.Units.LengthUnit.Millimeter).Value;
+
+				//
+				// Parse the ZPL locally using BinaryKits.Zpl.Viewer.
+				//
+				IPrinterStorage printerStorage = new PrinterStorage();
+				ZplAnalyzer analyzer = new(printerStorage, new FormatMerger());
+				var analyzeInfo = analyzer.Analyze(filteredZpl);
+
+				int labelCount = Math.Max(1, analyzeInfo.LabelInfos.Length);
+				returnValue.LabelCount = labelCount;
+
+				ZplElementDrawer drawer = new(printerStorage, new DrawerOptions() { OpaqueBackground = true });
+
+				if (labelIndex < analyzeInfo.LabelInfos.Length)
 				{
-					using (StringContent content = new(zpl.Filter(labelConfiguration.LabelFilters), Encoding.UTF8, "application/x-www-form-urlencoded"))
+					//
+					// Render the requested label to a PNG byte array.
+					//
+					byte[] imageData = drawer.Draw(analyzeInfo.LabelInfos[labelIndex].ZplElements, widthMm, heightMm, labelConfiguration.Dpmm);
+
+					//
+					// Apply rotation if needed.
+					//
+					if (labelConfiguration.LabelRotation != 0)
 					{
-						double width = (new Length(labelConfiguration.LabelWidth, labelConfiguration.Unit)).ToUnit(UnitsNet.Units.LengthUnit.Inch).Value;
-						double height = (new Length(labelConfiguration.LabelHeight, labelConfiguration.Unit)).ToUnit(UnitsNet.Units.LengthUnit.Inch).Value;
-
-						content.Headers.TryAddWithoutValidation("X-Rotation", Convert.ToString(labelConfiguration.LabelRotation));
-
-						if (width <= 15 && height <= 15)
-						{
-							string url = $"{BaseUrl}/{labelConfiguration.Dpmm}dpmm/labels/{width:#.##}x{height:#.##}/{labelIndex}/";
-							
-							using (HttpResponseMessage response = await client.PostAsync(url, content))
-							{
-								if (response.IsSuccessStatusCode)
-								{
-									//
-									// Get the label count.
-									//
-									if (response.Headers.Contains("X-Total-Count"))
-									{
-										returnValue.LabelCount = Convert.ToInt32(response.Headers.GetValues("X-Total-Count").FirstOrDefault());
-									}
-									else
-									{
-										returnValue.LabelCount = 1;
-									}
-
-									returnValue.Result = true;
-									returnValue.Label = await response.Content.ReadAsByteArrayAsync();
-									returnValue.Error = null;
-								}
-								else
-								{
-									string error = await response.Content.ReadAsStringAsync();
-
-									//
-									// Create the error image.
-									//
-									ErrorImage errorImage = ErrorImage.Create(labelConfiguration, "Labelary Error", error ?? response.ReasonPhrase);
-
-									returnValue.Result = false;
-									returnValue.Label = errorImage.ImageData;
-									returnValue.Error = error ?? response.ReasonPhrase;
-								}
-							}
-						}
-						else
-						{
-							//
-							// Create the message.
-							//
-							string message = "Height and Width must be less than or equal to 15 inches.";
-
-							//
-							// Create the error image.
-							//
-							ErrorImage errorImage = ErrorImage.Create(labelConfiguration, "Invalid Size", message);
-
-							returnValue.Result = false;
-							returnValue.Label = errorImage.ImageData;
-							returnValue.Error = message;
-						}
+						imageData = RotateImage(imageData, labelConfiguration.LabelRotation);
 					}
+
+					returnValue.Result = true;
+					returnValue.Label = imageData;
+					returnValue.Error = null;
+				}
+				else
+				{
+					//
+					// labelIndex is out of range; return a blank label image.
+					//
+					returnValue.Result = true;
+					returnValue.Label = drawer.Draw(Array.Empty<BinaryKits.Zpl.Label.Elements.ZplElementBase>(), widthMm, heightMm, labelConfiguration.Dpmm);
+					returnValue.Error = null;
 				}
 			}
 			catch (Exception ex)
@@ -117,7 +96,7 @@ namespace Labelary.Service
 				returnValue.Error = ex.Message;
 			}
 
-			return returnValue;
+			return Task.FromResult<IGetLabelResponse>(returnValue);
 		}
 
 		public async Task<IEnumerable<IGetLabelResponse>> GetLabelsAsync(ILabelConfiguration labelConfiguration, string zpl)
@@ -144,5 +123,30 @@ namespace Labelary.Service
 
 			return returnValue;
 		}
+
+		private static byte[] RotateImage(byte[] imageData, int degrees)
+		{
+			RotateFlipType rotateFlipType = degrees switch
+			{
+				90 => RotateFlipType.Rotate90FlipNone,
+				180 => RotateFlipType.Rotate180FlipNone,
+				270 => RotateFlipType.Rotate270FlipNone,
+				_ => RotateFlipType.RotateNoneFlipNone
+			};
+
+			if (rotateFlipType == RotateFlipType.RotateNoneFlipNone)
+			{
+				return imageData;
+			}
+
+			using MemoryStream ms = new(imageData);
+			using Image original = Image.FromStream(ms);
+			original.RotateFlip(rotateFlipType);
+
+			using MemoryStream outMs = new();
+			original.Save(outMs, ImageFormat.Png);
+			return outMs.ToArray();
+		}
 	}
 }
+
