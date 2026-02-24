@@ -6,8 +6,8 @@
 		<FileVersion>2.3.0</FileVersion>
 		<AssemblyVersion>2.3.0</AssemblyVersion>
 		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
-		<Title>Labelary Library Abstractions</Title>
-		<Description>Provides an easy way to call the Labelary API to get labels from ZPL. This library is used by the Virtual ZPL Printer application.</Description>
+		<Title>Labelary Library Service</Title>
+		<Description>Provides local ZPL label rendering using BinaryKits.Zpl.Viewer. This library is used by the Virtual ZPL Printer application.</Description>
 		<PackageProjectUrl>https://github.com/porrey/Virtual-ZPL-Printer</PackageProjectUrl>
 		<PackageReadmeFile>README.md</PackageReadmeFile>
 		<RepositoryUrl>https://github.com/porrey/Virtual-ZPL-Printer.git</RepositoryUrl>
@@ -43,6 +43,7 @@
 	</ItemGroup>
 
 	<ItemGroup>
+		<PackageReference Include="BinaryKits.Zpl.Viewer" Version="1.3.1" />
 		<PackageReference Include="System.Drawing.Common" Version="7.0.0" />
 	</ItemGroup>
 
