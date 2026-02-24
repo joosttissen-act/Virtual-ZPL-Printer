@@ -1,0 +1,29 @@
+name: Publish Installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    name: Publish Installer to GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Verify installer files exist
+        run: |
+          test -f "Installer/Virtual ZPL Printer Setup.msi" || (echo "MSI installer not found" && exit 1)
+          test -f "Installer/setup.exe" || (echo "setup.exe not found" && exit 1)
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            Installer/Virtual ZPL Printer Setup.msi
+            Installer/setup.exe
