@@ -84,7 +84,7 @@ namespace ImageCache.Repository
 					//
 					// Write the image.
 					//
-					_ = File.WriteAllBytesAsync(fileName, label.Label);
+					File.WriteAllBytes(fileName, label.Label);
 
 					IStoredImage storedImage = new StoredImage()
 					{
