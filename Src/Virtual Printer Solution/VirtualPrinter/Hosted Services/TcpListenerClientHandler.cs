@@ -16,6 +16,7 @@
  */
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net.Sockets;
 using System.Text;
@@ -57,69 +58,76 @@ namespace VirtualPrinter.Client
 			//
 			NetworkStream stream = client.GetStream();
 
-			while (client.Connected && stream.CanRead)
+			try
 			{
-				if (stream.DataAvailable)
+				//
+				// Accumulate all data from the stream before processing to handle
+				// ZPL data that arrives across multiple TCP packets (fragmentation).
+				//
+				using MemoryStream memoryStream = new();
+				byte[] readBuffer = new byte[4096];
+				int bytesRead;
+
+				try
 				{
-					try
+					while ((bytesRead = await stream.ReadAsync(readBuffer.AsMemory(0, readBuffer.Length))) > 0)
 					{
-						//
-						// Create a buffer for the data that is available.
-						//
-						byte[] buffer = new byte[client.Available];
-
-						//
-						// Read the data into the buffer.
-						//
-						int bytesRead = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length));
-
-						if (bytesRead > 0)
-						{
-							//
-							// Get the label image
-							//
-							string zpl = Encoding.UTF8.GetString(buffer);
-
-							if (!zpl.StartsWith("NOP"))
-							{
-								//
-								// Get the label images from Labelary.
-								//
-								IEnumerable<IGetLabelResponse> responses = await this.LabelService.GetLabelsAsync(labelConfiguration, zpl);
-
-								//
-								// Save the images.
-								//
-								IEnumerable<IStoredImage> storedImages = await this.ImageCacheRepository.StoreLabelImagesAsync(imagePathRoot, responses);
-
-								//
-								// Publish the images.
-								//
-								foreach (IGetLabelResponse response in responses)
-								{
-									//
-									// Publish the new label.
-									//
-									this.EventAggregator.GetEvent<LabelCreatedEvent>().Publish(new LabelCreatedEventArgs()
-									{
-										PrintRequest = new PrintRequestEventArgs()
-										{
-											LabelConfiguration = labelConfiguration,
-											Zpl = zpl
-										},
-										Label = storedImages.ElementAt(response.LabelIndex),
-										Result = response.Result,
-										Message = response.Result ? "Label successfully created." : response.Error
-									});
-								}
-							}
-						}
-					}
-					finally
-					{
-						client.Close();
+						await memoryStream.WriteAsync(readBuffer.AsMemory(0, bytesRead));
 					}
 				}
+				catch (IOException)
+				{
+					//
+					// The receive timeout was hit or the connection was reset;
+					// process whatever data was accumulated so far.
+					//
+				}
+
+				if (memoryStream.Length > 0)
+				{
+					//
+					// Get the label image
+					//
+					string zpl = Encoding.UTF8.GetString(memoryStream.GetBuffer(), 0, (int)memoryStream.Length);
+
+					if (!zpl.StartsWith("NOP"))
+					{
+						//
+						// Get the label images from Labelary.
+						//
+						IEnumerable<IGetLabelResponse> responses = await this.LabelService.GetLabelsAsync(labelConfiguration, zpl);
+
+						//
+						// Save the images.
+						//
+						IEnumerable<IStoredImage> storedImages = await this.ImageCacheRepository.StoreLabelImagesAsync(imagePathRoot, responses);
+
+						//
+						// Publish the images.
+						//
+						foreach (IGetLabelResponse response in responses)
+						{
+							//
+							// Publish the new label.
+							//
+							this.EventAggregator.GetEvent<LabelCreatedEvent>().Publish(new LabelCreatedEventArgs()
+							{
+								PrintRequest = new PrintRequestEventArgs()
+								{
+									LabelConfiguration = labelConfiguration,
+									Zpl = zpl
+								},
+								Label = storedImages.ElementAt(response.LabelIndex),
+								Result = response.Result,
+								Message = response.Result ? "Label successfully created." : response.Error
+							});
+						}
+					}
+				}
+			}
+			finally
+			{
+				client.Close();
 			}
 		}
 	}
